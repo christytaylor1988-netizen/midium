@@ -1,0 +1,26 @@
+MIDIum uses original glyph-to-note conversion, synthesis and interface code.
+It contains no sampled recordings and no proprietary font binaries.
+
+Bundled dependencies (offline copies):
+OpenSheetMusicDisplay 2.2.1 (BSD-3-Clause), including its bundled VexFlow engine.
+https://github.com/opensheetmusicdisplay/opensheetmusicdisplay
+https://registry.npmjs.org/opensheetmusicdisplay/-/opensheetmusicdisplay-2.2.1.tgz
+Licence: vendor/opensheetmusicdisplay-LICENSE.txt
+
+jsPDF 4.2.1 (MIT).
+https://github.com/parallax/jsPDF
+https://registry.npmjs.org/jspdf/-/jspdf-4.2.1.tgz
+Licence: vendor/jspdf-LICENSE.txt
+
+Arimo, Tinos, Comic Neue (SIL Open Font License 1.1).
+https://github.com/google/fonts/tree/main/ofl/arimo
+https://github.com/google/fonts/tree/main/ofl/tinos
+https://github.com/google/fonts/tree/main/ofl/comicneue
+Tinos licence from its upstream https://github.com/googlefonts/tinos
+Font files and their copyright/licence notices: fonts/.
+
+Technical references used:
+https://www.w3.org/2021/06/musicxml40/
+https://github.com/opensheetmusicdisplay/opensheetmusicdisplay/wiki/Getting-Started
+The verification MusicXML schema is the W3C MusicXML 4.0 schema, with only
+schema-import locations changed to local files for offline validation.
