@@ -141,11 +141,34 @@ export function dronePitch(c,mode='original',note='auto',octave='low'){
  if(note==='auto'){const weights=Array(12).fill(0);for(const n of c?.notes||[])weights[harmonyPitch(n,mode,1)%12]+=Math.max(1,n.duration);pc=weights.indexOf(Math.max(...weights));}
  return ({low:36,mid:48,high:60}[octave]??36)+Math.max(0,Math.min(11,pc||0));
 }
+// Mobile startup: request media playback rather than iOS's mute-switch-sensitive
+// ambient category. Do this and resume synchronously in the PLAY gesture, before
+// awaiting worklet registration. No separate unlock button or audible test tone.
+export function resumeMobileAudio(ctx){
+  try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(e){/* Optional API; ordinary Web Audio remains available. */}
+  const resumed=ctx.resume();
+  const unlock=ctx.createBufferSource();unlock.buffer=ctx.createBuffer(1,1,ctx.sampleRate);
+  unlock.connect(ctx.destination);unlock.onended=()=>unlock.disconnect();unlock.start();
+  return audioReady(resumed,'Audio startup timed out. Press PLAY to retry.').then(()=>{
+    if(ctx.state!=='running')throw Error('Audio is '+ctx.state+'. Press PLAY to retry.');
+  });
+}
+function audioReady(promise,message){
+  let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),5000);})]).finally(()=>clearTimeout(timer));
+}
 export class Player{
   constructor(onTick,onEnd){this.onTick=onTick;this.onEnd=onEnd;this.handles=[];this.playing=false;this.volume=.65;this.generation=0;this.sound={...DEFAULT_SOUND};this.eq={...DEFAULT_EQ};this.delay={...DEFAULT_DELAY};this.textures={...DEFAULT_TEXTURE};this.drone={on:false,note:'auto',octave:'low',level:.25,wooze:0};this.speed=1;this.speedMode='time';this.loop=true;this.pitchEcho={...DEFAULT_ECHO};this.echoQueue=[];this.echoHandles=[];}
   async play(c,startTick=0){
-    this.stop(false);const generation=this.generation;if(this.ctx?.state==='closed')this.ctx=null;this.ctx??=new AudioContext({latencyHint:'interactive'});await this.ctx.resume();await prepareTextures(this.ctx);if(generation!==this.generation)return;this.bus??=outputBus(this.ctx,this.volume,this.sound.hall,this.sound.chorus,this.eq,this.delay,this.textures,(m,e)=>this.onAudioStatus?.(m,e));
-    this.ctx.onstatechange=()=>{if(!this.playing||this.ctx.state==='running')return;const ctx=this.ctx,g=this.generation;this.onAudioStatus?.('Audio interrupted; attempting recovery.');Promise.race([ctx.resume(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Audio could not resume. Press PLAY to retry.')),2000))]).then(()=>{if(g===this.generation&&ctx.state==='running')this.onAudioStatus?.('Audio resumed.');}).catch(e=>{if(g===this.generation){this.stop();this.onAudioStatus?.(e.message,true);}});};
+    this.stop(false);const generation=this.generation;if(this.ctx?.state==='closed')this.ctx=null;
+    const Context=globalThis.AudioContext||globalThis.webkitAudioContext;
+    if(!Context)throw Error('Web Audio is unavailable in this browser.');
+    this.ctx??=new Context({latencyHint:'interactive'});
+    await resumeMobileAudio(this.ctx);if(generation!==this.generation)return;
+    await audioReady(prepareTextures(this.ctx),'Audio effects could not initialise. Press PLAY to retry.');
+    if(generation!==this.generation)return;
+    if(this.ctx.state!=='running')throw Error('Audio was interrupted during startup. Press PLAY to retry.');
+    this.bus??=outputBus(this.ctx,this.volume,this.sound.hall,this.sound.chorus,this.eq,this.delay,this.textures,(m,e)=>this.onAudioStatus?.(m,e));
+    this.ctx.onstatechange=()=>{if(!this.playing||this.ctx.state==='running')return;this.stop();this.onAudioStatus?.('Audio interrupted. Press PLAY to resume.',true);};
     this.bus.setEchoLevels(this.pitchEcho.dry,this.pitchEcho.level);this.c=c;this.startTick=startTick;this.origin=this.ctx.currentTime+.035;this.normalize();this.index=0;this.cycle=0;this.endAt=this.loop?Infinity:c.end;this.playing=true;
     while(this.index<c.notes.length&&c.notes[this.index].start<startTick)this.index++;
     for(const n of c.notes)if(n.start<startTick&&n.start+n.duration>startTick)this.schedule({...n,start:startTick,duration:n.start+n.duration-startTick});
