@@ -1,6 +1,6 @@
-import {noteCloud,cloudSettings,cloudMix} from './note-cloud.js?v=mobile-v11-presence';
+import {noteCloud,cloudSettings,cloudMix,prepareClouds} from './note-cloud.js?v=mobile-v12-smooth';
 import {DEFAULT_ECHO,echoSettings,echoPitch,echoAttenuation,echoFragment} from './pitch-echo.js?v=mobile-v11';
-import {hallReverb} from './hall-reverb.js?v=mk1r13';
+import {hallReverb} from './hall-reverb.js?v=mobile-v12-smooth';
 import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mobile-v11-glitch';
 import {PPQ,INSTRUMENTS,maxPolyphony} from './events.js?v=mk1r11';
 // Playback-only settings: never written into the composition or exported notes.
@@ -85,8 +85,8 @@ export function outputBus(ctx,volume=.65,hall=DEFAULT_SOUND.hall,chorus=0,eq=DEF
   // EQ covers dry sound AND effect returns, before the original protection stages.
   processingInput.connect(equalizer.input);equalizer.output.connect(compressor);compressor.connect(limit);limit.connect(out);out.connect(playbackFade);playbackFade.connect(ctx.destination);out.gain.value=volume*.9;processingInput.gain.value=1.4*1.15;
   let echo=digitalDelay(ctx,delay);echo.output.connect(processingInput);
-  let stage=soundStage(ctx,hall,chorus,echo.input,textures,onStatus),disposed=false;const sourceGain=ctx.createGain(),echoGain=ctx.createGain();sourceGain.connect(stage.input);echoGain.connect(stage.input);echoGain.gain.value=0;
-  return {get mix(){return sourceGain;},get echoInput(){return echoGain;},get droneInput(){return stage.input;},setEchoLevels(dry,level){const t=ctx.currentTime;sourceGain.gain.cancelAndHoldAtTime(t);sourceGain.gain.setTargetAtTime(dry,t,.008);echoGain.gain.cancelAndHoldAtTime(t);echoGain.gain.setTargetAtTime(level,t,.008);},processingInput,out,playbackFade,setEQ:equalizer.set,
+  let stage=soundStage(ctx,hall,chorus,echo.input,textures,onStatus),disposed=false;const sourceGain=ctx.createGain(),echoGain=ctx.createGain();sourceGain.connect(stage.input);echoGain.connect(stage.input);echoGain.gain.value=0;let dryTarget=1,echoTarget=0;
+  return {get mix(){return sourceGain;},get echoInput(){return echoGain;},get droneInput(){return stage.input;},setEchoLevels(dry,level){const t=ctx.currentTime;if(dry!==dryTarget){dryTarget=dry;sourceGain.gain.cancelAndHoldAtTime(t);sourceGain.gain.setTargetAtTime(dry,t,.008);}if(level!==echoTarget){echoTarget=level;echoGain.gain.cancelAndHoldAtTime(t);echoGain.gain.setTargetAtTime(level,t,.008);}},processingInput,out,playbackFade,setEQ:equalizer.set,
     setTextures(settings){textures={...DEFAULT_TEXTURE,...settings};stage.setTextures(textures);},
     setDelay(settings){delay=delaySettings(settings);echo.set(delay);},
     setHall(amount){hall=amount;stage.setHall(amount);},
@@ -100,15 +100,15 @@ export function synthNote(ctx,bus,n,instrument,when,duration,normalization=1,set
   const p=INSTRUMENTS[instrument],osc=ctx.createOscillator(),amp=ctx.createGain(),nodes=[osc,amp],sources=[osc],pitchSources=[osc];
   const hz=440*2**((n.pitch-69)/12);
   let waves=voiceWaves.get(ctx);if(!waves){waves=new Map();voiceWaves.set(ctx,waves);}if(!waves.has(instrument)){const real=new Float32Array(p.partials.length+1),imag=new Float32Array(real.length);p.partials.forEach((v,i)=>imag[i+1]=v);waves.set(instrument,ctx.createPeriodicWave(real,imag));}osc.setPeriodicWave(waves.get(instrument));osc.frequency.setValueAtTime(hz*(p.glide||1),when);if(p.glide)osc.frequency.exponentialRampToValueAtTime(hz,when+.035);
-  const peak=.13*normalization*n.velocity/127,off=when+duration;let points=[],ended=false,cancelled=false,cloud=null,lastShape=settings,lastSemitones=soundSettings(settings).pitch;const clean=ctx.createGain();nodes.push(clean);
+  const peak=.13*normalization*n.velocity/127,off=when+duration;let points=[],ended=false,cancelled=false,cloud=null,lastShape=settings,lastSemitones=soundSettings(settings).pitch,pitchApplied=false,cleanTarget=1;const clean=ctx.createGain();nodes.push(clean);
   // A queued oscillator must remain silent before its envelope begins.
   amp.gain.value=0;
   const held=(t,s)=>{const age=t-when;if(age<=0)return 0;if(age<s.attack)return peak*age/s.attack;if(age<s.attack+s.decay)return peak*(1-(1-s.sustain)*(age-s.attack)/s.decay);return peak*s.sustain;};
   const valueAt=t=>{if(!points.length||t<points[0][0])return 0;for(let i=1;i<points.length;i++)if(t<=points[i][0]){const [a,x]=points[i-1],[b,y]=points[i];return x+(y-x)*(t-a)/(b-a);}return points.at(-1)[1];};
   const handle={end:0,visualNote(time){return ended||cancelled||time<when||time>=handle.end?null:{pitch:n.pitch+lastSemitones,start:when};},setCloud(raw,t=ctx.currentTime){if(ended||cancelled)return;const s=cloudSettings(raw),amount=s.crush*s.blend;
     if(!cloud&&amount>0){cloud=noteCloud(ctx,bus,hz,peak,when,off,s);if(cloud){cloud.setPitch(lastSemitones,t);handle.end=Math.max(handle.end,cloud.envelope(soundSettings(lastShape),t));for(const source of sources)source.stop(handle.end);}}
-    cloud?.set(s,t);clean.gain.cancelAndHoldAtTime(t);clean.gain.setTargetAtTime(cloudMix(cloud?amount:0).clean,t,.018);
-  },setPitch(semitones,t=ctx.currentTime){if(ended||cancelled)return;lastSemitones=semitones;cloud?.setPitch(semitones,t);const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(cents,t+.025);}}},cancel(t){if(ended||cancelled)return;cancelled=true;cloud?.cancel(t);amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
+    cloud?.set(s,t);const target=cloudMix(cloud?amount:0).clean;if(target!==cleanTarget){cleanTarget=target;clean.gain.cancelAndHoldAtTime(t);clean.gain.setTargetAtTime(target,t,.018);}
+  },setPitch(semitones,t=ctx.currentTime){if(ended||cancelled||pitchApplied&&semitones===lastSemitones)return;pitchApplied=true;lastSemitones=semitones;cloud?.setPitch(semitones,t);const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(cents,t+.025);}}},cancel(t){if(ended||cancelled)return;cancelled=true;cloud?.cancel(t);amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
     if(ended||cancelled||t>=handle.end&&points.length)return;
     lastShape=raw;const s=soundSettings(raw),initial=!points.length||t<when,start=initial?when:t;
     const current=initial?0:valueAt(t),next=[[start,current]];
@@ -171,6 +171,7 @@ export class Player{
     await audioReady(prepareTextures(this.ctx),'Audio effects could not initialise. Press PLAY to retry.');
     if(generation!==this.generation)return;
     if(this.ctx.state!=='running')throw Error('Audio was interrupted during startup. Press PLAY to retry.');
+    prepareClouds(this.ctx);
     this.bus??=outputBus(this.ctx,this.volume,this.sound.hall,this.sound.chorus,this.eq,this.delay,this.textures,(m,e)=>this.onAudioStatus?.(m,e));
     this.ctx.onstatechange=()=>{if(!this.playing||this.ctx.state==='running')return;this.stop();this.onAudioStatus?.('Audio interrupted. Press PLAY to resume.',true);};
     this.bus.setEchoLevels(this.pitchEcho.dry,this.pitchEcho.level);this.c=c;this.startTick=startTick;this.origin=this.ctx.currentTime+.035;this.normalize();this.index=0;this.cycle=0;this.endAt=this.loop?Infinity:c.end;this.playing=true;
@@ -229,7 +230,7 @@ export class Player{
   soundingNotes(){
     if(!this.playing||!this.ctx)return [];const now=this.ctx.currentTime,notes=[];
     for(const h of [...(this.pitchEcho.dry>0?this.handles:[]),...(this.pitchEcho.level>0?this.echoHandles:[])]){const n=h.visualNote(now);if(n)notes.push(n);}
-    if(this.droneVoice&&this.drone.level>0)notes.push({pitch:this.droneVoice.visualPitch,start:this.droneVoice.visualStart});return notes;
+    if(this.droneVoice&&this.drone.on&&this.drone.level>0)notes.push({pitch:this.droneVoice.visualPitch,start:this.droneVoice.visualStart});return notes;
   }
   playbackPitch(){return this.sound.pitch+(this.speedMode==='pitch'?12*Math.log2(this.speed):0);}
   setSpeed(value,mode=this.speedMode){
@@ -242,7 +243,8 @@ export class Player{
   setTextures(settings){const before=cloudSettings(this.textures);this.textures={...DEFAULT_TEXTURE,...settings};this.bus?.setTextures(this.textures);const after=cloudSettings(this.textures);if(Object.keys(after).some(k=>after[k]!==before[k]))for(const h of this.handles)h.setCloud(this.textures);}
   setDrone(settings){this.drone={...this.drone,...settings};this.updateDrone();}
   updateDrone(){
-   if(!this.playing||!this.drone.on||!this.c?.notes.length){this.stopDrone();return;}
+   if(!this.playing||!this.c?.notes.length){this.stopDrone();return;}
+   if(!this.drone.on){if(this.droneVoice){const p=this.droneVoice.gain.gain,t=this.ctx.currentTime;p.cancelAndHoldAtTime(t);p.setTargetAtTime(0,t,.015);}return;}
    const ctx=this.ctx,t=ctx.currentTime,hz=440*Math.pow(2,(dronePitch(this.c,this.harmonyMode,this.drone.note,this.drone.octave)+this.sound.pitch-69)/12);
    if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth,visualStart:t};}
    this.droneVoice.visualPitch=69+12*Math.log2(hz/440);

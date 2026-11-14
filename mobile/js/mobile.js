@@ -1,8 +1,9 @@
+import {spectrumPicker} from './spectrum-picker.js?v=mobile-v12-smooth';
 import {colourConfiguration,PRESET_COLOURS} from './colour-sound.js?v=mobile-v12-hue';
 import {PRESETS} from './presets.js?v=mobile-v11-presets';
 import {FONTS,loadFonts,rasterize} from './glyphs.js?v=1.2.0';
 import {makeComposition,INSTRUMENTS,PPQ} from './events.js?v=mk1r11';
-import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v11-piano';
+import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v12-smooth';
 import {DEFAULT_TEXTURE} from './texture-core.js?v=mobile-v11-glitch';
 import {DEFAULT_ECHO} from './pitch-echo.js?v=mobile-v11';
 import {PianoRoll} from './piano-roll.js?v=mobile-v11-piano';
@@ -27,10 +28,14 @@ $('sheetFit').onclick=()=>{sheetZoom=1;layoutScore();document.querySelector('.sh
 $('sheetOut').onclick=()=>{sheetZoom=Math.max(.5,sheetZoom/1.25);layoutScore();};
 $('sheetIn').onclick=()=>{sheetZoom=Math.min(4,sheetZoom*1.25);layoutScore();};
 new ResizeObserver(()=>{if(displayView==='sheet')layoutScore();}).observe(document.querySelector('.sheet-scroll'));
-function updateNoteColour(){styleScoreTitle();if(composition){composition.presentation.ink=$('noteColour').value;roll.draw();}}
+function updateNoteColour(syncPicker=true){if(syncPicker)picker.sync();styleScoreTitle();if(composition){composition.presentation.ink=$('noteColour').value;roll.draw();}}
 function loadControls(settings){for(const [id,val] of Object.entries(settings)){if(id==='droneOn')droneOn=val;else if(id==='glitchRandom')texture.glitchRandom=val;else $(id).value=val;}}
 let colourFrame=0;
-$('noteColour').oninput=()=>{selectPreset('free');if(!colourFrame)colourFrame=requestAnimationFrame(()=>{colourFrame=0;loadControls(colourConfiguration($('noteColour').value));updateNoteColour();apply();});};
+const picker=spectrumPicker($('colourButton'),$('colourPicker'),$('colourField'),$('colourHue'),$('noteColour'),()=>{
+ selectPreset('free');
+ // One latest-value transaction per animation frame, never a backlog of pointer events.
+ if(!colourFrame)colourFrame=requestAnimationFrame(()=>{colourFrame=0;loadControls(colourConfiguration($('noteColour').value));updateNoteColour(false);apply();});
+});
 const DEFAULT_TEXT='ENTER some text?';
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
 const player=new Player(t=>{if(!composition)return;roll.setActiveNotes(player.soundingNotes(),player.ctx?.currentTime||0);roll.cursor(t);const s=Math.floor(t/PPQ*60/composition.tempo);$('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');},()=>{$('play').textContent='▶ PLAY';roll.setActiveNotes([],0);roll.cursor(roll.tick,false);});
@@ -77,7 +82,7 @@ stutter.onlostpointercapture=endStutter;stutter.oncontextmenu=e=>e.preventDefaul
 stutter.onkeydown=e=>{if((e.key===' '||e.key==='Enter')&&!e.repeat){e.preventDefault();selectPreset('free');texture.stutter=1;sendStutter();}};
 stutter.onkeyup=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();endStutter();}};stutter.onblur=endStutter;window.addEventListener('blur',endStutter);
 const defaults={"attack": 0.175, "release": 1.25, "chorus": 0, "pitch": 0, "speed": 1, "reverseTime": 0.6, "reverse": 0, "drift": 0, "crush": 0, "warmth": 0.6, "grain": 0.35, "blend": 1, "glitchAmount": 0, "glitchRate": 25, "delayTime": 0.35, "delayMix": 0, "feedback": 0.35, "mix": 0.18, "tone": 0.5, "length": 3.4, "echoPitch": 12, "echoRandom": 0, "echoFeedback": 0.35, "dry": 1, "level": 0, "echoDecay": 0.35, "echoWooze": 0, "density": 0.5, "amount": 1, "droneLevel": 0.25, "droneWooze": 0, "volume": 65, "echoScale": "follow", "echoInterval": "octaves", "echoPattern": "updown", "mode": "original", "droneNote": "auto", "octave": "low"};
-function reset(){$('noteColour').value='#000000';selectPreset('free');endStutter();texture={...DEFAULT_TEXTURE};echo={...DEFAULT_ECHO};droneOn=false;for(const [key,val] of Object.entries(defaults))$(key).value=val;loadControls(colourConfiguration('#000000'));player.setEQ({low:0,mid:0,high:0});apply();sendStutter();}
+function reset(){$('noteColour').value='#000000';picker.sync();selectPreset('free');endStutter();texture={...DEFAULT_TEXTURE};echo={...DEFAULT_ECHO};droneOn=false;for(const [key,val] of Object.entries(defaults))$(key).value=val;loadControls(colourConfiguration('#000000'));player.setEQ({low:0,mid:0,high:0});apply();sendStutter();}
 $('reset').onclick=()=>{reset();$('source').value=DEFAULT_TEXT;generate();status('Default phrase and sound restored.');};
 $('randomise').onclick=()=>{selectPreset('free');endStutter();const rand=(a,b)=>a+Math.random()*(b-a),choose=a=>a[Math.floor(Math.random()*a.length)];$('attack').value=rand(.015,.4);$('release').value=rand(.3,2);$('chorus').value=rand(.05,.55);$('dry').value=1;$('level').value=rand(.25,.6);$('density').value=rand(.15,.55);$('echoScale').value=choose(['pentatonic','minor','major','follow']);$('glitchAmount').value=Math.random()<.45?0:rand(.04,.28);$('glitchRate').value=rand(25,140);$('mix').value=rand(.2,.55);$('tone').value=rand(.1,.9);$('length').value=rand(1.5,7);texture.glitchRandom=1;$('echoFeedback').value=rand(.15,.4);$('echoRandom').value=rand(.05,.3);apply();status('New sound. Your phrase is unchanged.');};
 document.addEventListener('visibilitychange',()=>{if(document.hidden){endStutter();player.stop();status('Paused. Press PLAY to resume.');}});

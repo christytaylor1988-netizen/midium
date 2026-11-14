@@ -5,12 +5,17 @@ function noiseBuffer(ctx){
  if(buffers.has(ctx))return buffers.get(ctx);
  const b=ctx.createBuffer(1,ctx.sampleRate*3,ctx.sampleRate),a=b.getChannelData(0);let seed=912713,low=0;
  for(let i=0;i<a.length;i++){seed=(Math.imul(seed,1664525)+1013904223)>>>0;const white=seed/2147483648-1;low=.97*low+.03*white;a[i]=.5*white+2*low;}
+ // Join the looping noise at a shared endpoint, without changing its interior texture.
+ const seam=Math.round(ctx.sampleRate*.005),first=a[0],last=a[a.length-1],join=(first+last)*.5;
+ for(let i=0;i<seam;i++){const w=(1-Math.cos(Math.PI*i/(seam-1)))*.5;a[i]=join*(1-w)+a[i]*w;a[a.length-1-i]=join*(1-w)+a[a.length-1-i]*w;}
  buffers.set(ctx,b);return b;
 }
+export function prepareClouds(ctx){noiseBuffer(ctx);}
 export const CLOUD_DEFAULTS=Object.freeze({crush:0,warmth:.6,grain:.35,blend:1});
 export function cloudSettings(raw={}){return Object.fromEntries(Object.entries(CLOUD_DEFAULTS).map(([k,d])=>[k,Math.max(0,Math.min(1,Number.isFinite(raw[k])?raw[k]:d))]));}
 export function cloudMix(amount){const angle=Math.max(0,Math.min(1,amount))*Math.acos(.035);return {clean:Math.cos(angle),noise:Math.sin(angle)};}
-const smooth=(p,v,t)=>{p.cancelAndHoldAtTime(t);p.setTargetAtTime(v,t,.018);};
+const targets=new WeakMap();
+const smooth=(p,v,t)=>{if(targets.get(p)===v)return;targets.set(p,v);p.cancelAndHoldAtTime(t);p.setTargetAtTime(v,t,.018);};
 export function noteCloud(ctx,destination,hz,peak,when,off,settings){
  if((counts.get(ctx)||0)>=64)return null;counts.set(ctx,(counts.get(ctx)||0)+1);
  const noise=ctx.createBufferSource(),band=ctx.createBiquadFilter(),tone=ctx.createBiquadFilter(),grain=ctx.createGain(),env=ctx.createGain(),wet=ctx.createGain(),lfo=ctx.createOscillator(),depth=ctx.createGain();
