@@ -1,6 +1,6 @@
-import {noteCloud,cloudSettings,cloudMix,prepareClouds} from './note-cloud.js?v=mobile-v12-smooth';
+import {noteCloud,cloudSettings,cloudMix,prepareClouds} from './note-cloud.js?v=mobile-v13';
 import {DEFAULT_ECHO,echoSettings,echoPitch,echoAttenuation,echoFragment} from './pitch-echo.js?v=mobile-v11';
-import {hallReverb} from './hall-reverb.js?v=mobile-v12-smooth';
+import {hallReverb} from './hall-reverb.js?v=mobile-v13';
 import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mobile-v11-glitch';
 import {PPQ,INSTRUMENTS,maxPolyphony} from './events.js?v=mk1r11';
 // Playback-only settings: never written into the composition or exported notes.
@@ -59,12 +59,12 @@ export function digitalDelay(ctx,settings=DEFAULT_DELAY){
  dc.type='highpass';dc.frequency.value=8;dc.Q.value=.5;
  const curve=new Float32Array(8193);for(let i=0;i<curve.length;i++){const x=i/(curve.length-1)*2-1;curve[i]=Math.abs(x)<=.5?x:Math.sign(x)*(.5+.48*Math.tanh((Math.abs(x)-.5)/.48));}guard.curve=curve;
  input.connect(dry);dry.connect(output);input.connect(sum);sum.connect(dc);dc.connect(guard);returnBus.connect(wet);wet.connect(output);returnBus.connect(feedback);feedback.connect(sum);
- const taps=[0,1].map(()=>{const delay=ctx.createDelay(2.5),gain=ctx.createGain();gain.gain.value=0;guard.connect(delay);delay.connect(gain);gain.connect(returnBus);return {delay,gain};});
+ const taps=[0,1].map(()=>{const delay=ctx.createDelay(2.5),gain=ctx.createGain();gain.gain.value=0;guard.connect(delay);delay.connect(gain);gain.connect(returnBus);return {delay,gain,time:null};});
  let state=delaySettings(settings),active=0,busy=false,timer,disposed=false;const previous=new Map();
- taps[0].delay.delayTime.value=state.time;taps[0].gain.gain.value=1;
- const changeTime=()=>{if(disposed||busy||taps[active].delay.delayTime.value===state.time)return;const old=taps[active],next=taps[1-active],t=ctx.currentTime;busy=true;
+ taps[0].time=state.time;taps[0].delay.delayTime.value=state.time;taps[0].gain.gain.value=1;
+ const changeTime=()=>{if(disposed||busy||taps[active].time===state.time)return;const old=taps[active],next=taps[1-active],t=ctx.currentTime;busy=true;
   // Move only a silent read head. Sweeping a live delay read head was producing pitch/alias bursts.
-  next.delay.delayTime.setValueAtTime(state.time,t);next.gain.gain.setValueAtTime(0,t);next.gain.gain.linearRampToValueAtTime(1,t+.035);old.gain.gain.setValueAtTime(1,t);old.gain.gain.linearRampToValueAtTime(0,t+.035);active=1-active;
+  next.time=state.time;next.delay.delayTime.setValueAtTime(state.time,t);next.gain.gain.setValueAtTime(0,t);next.gain.gain.linearRampToValueAtTime(1,t+.035);old.gain.gain.setValueAtTime(1,t);old.gain.gain.linearRampToValueAtTime(0,t+.035);active=1-active;
   const end=t+.035;const finish=()=>{if(disposed)return;if(ctx.currentTime<end){timer=setTimeout(finish,20);return;}busy=false;changeTime();};timer=setTimeout(finish,45);
  };
  const set=(raw,initial=false)=>{state=delaySettings(raw);const t=ctx.currentTime;for(const [p,v]of [[dry.gain,1-state.mix],[wet.gain,state.mix],[feedback.gain,state.feedback*.9995]]){if(previous.get(p)===v)continue;previous.set(p,v);if(initial)p.value=v;else{p.cancelAndHoldAtTime(t);p.setTargetAtTime(v,t,.008);}}changeTime();};set(settings,true);
@@ -244,11 +244,12 @@ export class Player{
   setDrone(settings){this.drone={...this.drone,...settings};this.updateDrone();}
   updateDrone(){
    if(!this.playing||!this.c?.notes.length){this.stopDrone();return;}
-   if(!this.drone.on){if(this.droneVoice){const p=this.droneVoice.gain.gain,t=this.ctx.currentTime;p.cancelAndHoldAtTime(t);p.setTargetAtTime(0,t,.015);}return;}
+   if(!this.drone.on){if(this.droneVoice){const p=this.droneVoice.gain.gain,t=this.ctx.currentTime;this.droneVoice.targets.set(p,0);p.cancelAndHoldAtTime(t);p.setTargetAtTime(0,t,.015);}return;}
    const ctx=this.ctx,t=ctx.currentTime,hz=440*Math.pow(2,(dronePitch(this.c,this.harmonyMode,this.drone.note,this.drone.octave)+this.sound.pitch-69)/12);
-   if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth,visualStart:t};}
+   if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth,visualStart:t,targets:new Map()};}
    this.droneVoice.visualPitch=69+12*Math.log2(hz/440);
-   const {osc,gain,lfo,depth}=this.droneVoice;depth.gain.setTargetAtTime(this.drone.wooze*this.drone.wooze*85,t,.15);lfo.frequency.setTargetAtTime(.12+this.drone.wooze*.7,t,.15);osc.frequency.cancelAndHoldAtTime(t);osc.frequency.exponentialRampToValueAtTime(hz,t+.12);gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(Math.max(0,Math.min(1,this.drone.level))*.16,t+.08);
+   const {osc,gain,lfo,depth,targets}=this.droneVoice;
+   for(const [param,value,kind,seconds] of [[depth.gain,this.drone.wooze*this.drone.wooze*85,'target',.15],[lfo.frequency,.12+this.drone.wooze*.7,'target',.15],[osc.frequency,hz,'exponential',.12],[gain.gain,Math.max(0,Math.min(1,this.drone.level))*.16,'linear',.08]]){if(targets.get(param)===value)continue;targets.set(param,value);param.cancelAndHoldAtTime(t);if(kind==='target')param.setTargetAtTime(value,t,seconds);else if(kind==='exponential')param.exponentialRampToValueAtTime(value,t+seconds);else param.linearRampToValueAtTime(value,t+seconds);}
   }
   stopDrone(){if(!this.droneVoice)return;const {osc,gain,lfo,depth}=this.droneVoice;this.droneVoice=null;const t=this.ctx.currentTime;gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(0,t+.05);osc.stop(t+.06);lfo.stop(t+.06);osc.onended=()=>{osc.disconnect();gain.disconnect();lfo.disconnect();depth.disconnect();};}
   setPitchEcho(s){this.pitchEcho=echoSettings({...this.pitchEcho,...s});this.bus?.setEchoLevels(this.pitchEcho.dry,this.pitchEcho.level);if(this.pitchEcho.level===0)this.clearEcho();}

@@ -34,7 +34,7 @@ export function noteCloud(ctx,destination,hz,peak,when,off,settings){
  const envelope=(shape,t=ctx.currentTime)=>{
   const start=Math.max(when,t),attack=Math.max(.018,shape.attack),release=Math.min(4,.25+shape.release+state.crush*1.5),level=peak*3.2;
   const next=[[start,at(start)]];
-  if(start<off){const rise=Math.min(off,Math.max(start+.02,when+attack));next.push([rise,level],[off,level*.65]);}
+  if(start<off){const rise=Math.min(off,Math.max(start+.02,when+attack));if(rise<off)next.push([rise,level]);next.push([off,level*.65]);}
   end=Math.max(start+.025,off+release);next.push([Math.max(start+.012,off+release*.6),Math.min(level*.18,start<off?level*.18:at(start)*.3)],[end,0]);
   env.gain.cancelAndHoldAtTime(start);env.gain.setValueAtTime(next[0][1],start);for(const [time,v]of next.slice(1))env.gain.linearRampToValueAtTime(v,time);points=next;noise.stop(end+.02);lfo.stop(end+.02);return end+.025;
  };

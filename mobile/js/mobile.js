@@ -1,9 +1,9 @@
-import {spectrumPicker} from './spectrum-picker.js?v=mobile-v12-smooth';
+import {spectrumPicker} from './spectrum-picker.js?v=mobile-v13';
 import {colourConfiguration,PRESET_COLOURS} from './colour-sound.js?v=mobile-v12-hue';
 import {PRESETS} from './presets.js?v=mobile-v11-presets';
 import {FONTS,loadFonts,rasterize} from './glyphs.js?v=1.2.0';
 import {makeComposition,INSTRUMENTS,PPQ} from './events.js?v=mk1r11';
-import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v12-smooth';
+import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v13';
 import {DEFAULT_TEXTURE} from './texture-core.js?v=mobile-v11-glitch';
 import {DEFAULT_ECHO} from './pitch-echo.js?v=mobile-v11';
 import {PianoRoll} from './piano-roll.js?v=mobile-v11-piano';
@@ -38,17 +38,17 @@ const picker=spectrumPicker($('colourButton'),$('colourPicker'),$('colourField')
 });
 const DEFAULT_TEXT='ENTER some text?';
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
-const player=new Player(t=>{if(!composition)return;roll.setActiveNotes(player.soundingNotes(),player.ctx?.currentTime||0);roll.cursor(t);const s=Math.floor(t/PPQ*60/composition.tempo);$('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');},()=>{$('play').textContent='▶ PLAY';roll.setActiveNotes([],0);roll.cursor(roll.tick,false);});
+const player=new Player(t=>{if(!composition)return;roll.setActiveNotes(player.soundingNotes(),player.ctx?.currentTime||0);roll.cursor(t);const s=Math.floor(t/PPQ*60/composition.tempo);$('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');},()=>{$('playText').textContent='PLAY';roll.setActiveNotes([],0);roll.cursor(roll.tick,false);});
 player.onAudioStatus=status;
 INSTRUMENTS.forEach((p,i)=>$('instrument').add(new Option(p.name,String(i))));
 function generate(){styleScoreTitle();endStutter();clearTimeout(timer);player.stop();try{const style=Object.fromEntries(['bold','italic','underline'].map(k=>[k,$(k).getAttribute('aria-pressed')==='true']));Object.assign($('source').style,{fontFamily:'"'+FONTS[$('font').value].family+'",sans-serif',fontWeight:style.bold?'700':'400',fontStyle:style.italic?'italic':'normal',textDecoration:style.underline?'underline':'none'});const raster=rasterize($('source').value,$('font').value,24,$('letterform').value,style);composition=makeComposition(raster,{scale:1,transpose:0,tempo:+$('tempo').value||120,instrument:Number($('instrument').value),size:24,mode:$('letterform').value});composition.presentation={ink:$('noteColour').value,background:'#fff1da'};roll.set(composition);roll.fit();showScore();$('verticalZoom').value=1;$('count').textContent=composition.notes.length+' NOTES';$('play').disabled=!composition.notes.length;$('elapsed').textContent='00:00';status(composition.notes.length?'Ready. Press PLAY.':'Type a phrase to begin.');}catch(e){composition=null;$('play').disabled=true;status(e.message,true);}}
 $('source').addEventListener('input',()=>{styleScoreTitle();player.stop();$('play').disabled=true;clearTimeout(timer);if(ready)timer=setTimeout(generate,220);});
-$('play').onclick=async()=>{if(starting||player.playing||!composition)return;starting=true;status('Starting audio…');try{await player.play(composition);if(player.playing){$('play').textContent='▶ PLAYING';status('Playing. Explore the effects.');}}catch(e){player.stop();status('Audio could not start: '+e.message,true);}finally{starting=false;}};
+$('play').onclick=async()=>{if(starting||player.playing||!composition)return;starting=true;status('Starting audio…');try{await player.play(composition);if(player.playing){$('playText').textContent='PLAYING';status('Playing. Explore the effects.');}}catch(e){player.stop();status('Audio could not start: '+e.message,true);}finally{starting=false;}};
 $('stop').onclick=()=>{endStutter();player.stopWithFade();roll.cursor(0);$('elapsed').textContent='00:00';status('Stopped.');};
 $('loop').onclick=()=>{player.setLoop(!player.loop);$('loop').setAttribute('aria-pressed',String(player.loop));$('loop').textContent=player.loop?'LOOP ON':'LOOP OFF';};player.setLoop(true);
 for(const id of ['font','letterform'])$(id).onchange=generate;for(const id of ['bold','italic','underline'])$(id).onclick=()=>{$(id).setAttribute('aria-pressed',String($(id).getAttribute('aria-pressed')!=='true'));generate();};
-$('tempo').onchange=async()=>{selectPreset('free');const playing=player.playing,tick=playing?player.position():0;$('tempo').value=Math.max(20,Math.min(480,+$('tempo').value||120));generate();if(playing&&composition){try{await player.play(composition,tick);$('play').textContent='▶ PLAYING';}catch(e){status('Press PLAY to restart.',true);}}};
-$('instrument').onchange=async()=>{selectPreset('free');if(!composition)return;composition={...composition,instrument:Number($('instrument').value)};showScore();try{await player.retime(composition);if(player.playing)$('play').textContent='▶ PLAYING';}catch(e){player.stop();status('Press PLAY to restart audio.',true);}};
+$('tempo').onchange=async()=>{selectPreset('free');const playing=player.playing,tick=playing?player.position():0;$('tempo').value=Math.max(20,Math.min(480,+$('tempo').value||120));generate();if(playing&&composition){try{await player.play(composition,tick);$('playText').textContent='PLAYING';}catch(e){status('Press PLAY to restart.',true);}}};
+$('instrument').onchange=async()=>{selectPreset('free');if(!composition)return;composition={...composition,instrument:Number($('instrument').value)};showScore();try{await player.retime(composition);if(player.playing)$('playText').textContent='PLAYING';}catch(e){player.stop();status('Press PLAY to restart audio.',true);}};
 $('fit').onclick=()=>{roll.fit();$('verticalZoom').value=1;};$('verticalZoom').oninput=()=>roll.setVerticalZoom(Number($('verticalZoom').value));$('zoom').oninput=()=>roll.setZoom(Number($('zoom').value));
 for(const button of document.querySelectorAll('[data-effect]'))button.onclick=()=>{endStutter();for(const b of document.querySelectorAll('[data-effect]')){const active=b===button;b.setAttribute('aria-pressed',String(active));$(b.dataset.effect).hidden=!active;}};
 const applied={};function changed(key,value,fn){const encoded=JSON.stringify(value);if(applied[key]!==encoded){fn(value);applied[key]=encoded;}}
