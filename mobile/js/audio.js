@@ -1,7 +1,7 @@
-import {noteCloud,cloudSettings,cloudMix,prepareClouds} from './note-cloud.js?v=mobile-v13';
+import {noteCloud,cloudSettings,cloudMix,prepareClouds} from './note-cloud.js?v=mobile-v14';
 import {DEFAULT_ECHO,echoSettings,echoPitch,echoAttenuation,echoFragment} from './pitch-echo.js?v=mobile-v11';
-import {hallReverb} from './hall-reverb.js?v=mobile-v13';
-import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mobile-v11-glitch';
+import {hallReverb} from './hall-reverb.js?v=mobile-v14';
+import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mobile-v14';
 import {PPQ,INSTRUMENTS,maxPolyphony} from './events.js?v=mk1r11';
 // Playback-only settings: never written into the composition or exported notes.
 export const DEFAULT_SOUND=Object.freeze({attack:.175,decay:.35,sustain:.35,release:1.25,hall:0,chorus:0,pitch:0});
@@ -9,6 +9,8 @@ export function soundSettings(s={}){
   const ranges={attack:[.001,2],decay:[.01,3],sustain:[0,1],release:[.01,6],hall:[0,1],chorus:[0,1],pitch:[-12,12]};
   return Object.fromEntries(Object.entries(ranges).map(([k,[lo,hi]])=>[k,Math.max(lo,Math.min(hi,Number.isFinite(s[k])?s[k]:DEFAULT_SOUND[k]))]));
 }
+// Live pitch/mix targets use setTargetAtTime: a completed ramp has no new start
+// anchor after cancelAndHoldAtTime, so another ramp could jump from a past event.
 // Two short modulated delays; independent slow drift avoids a rigid, shared wobble.
 export function woozyChorus(ctx,amount=0){
   const input=ctx.createGain(),output=ctx.createGain(),dry=ctx.createGain(),wet=ctx.createGain(),merger=ctx.createChannelMerger(2),nodes=[input,output,dry,wet,merger],lfos=[],depths=[];
@@ -24,7 +26,7 @@ export function woozyChorus(ctx,amount=0){
   }
   const setAmount=(raw,initial=false)=>{const a=Math.max(0,Math.min(1,raw)),t=ctx.currentTime;
     for(const [param,value]of [[dry.gain,1-.42*a],[wet.gain,.55*a],...depths.map(d=>[d.param,d.depth*a])]){
-      if(initial)param.value=value;else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(value,t+.035);}
+      if(initial)param.value=value;else param.setTargetAtTime(value,t,.012);
     }
   };
   setAmount(amount,true);return {input,output,setAmount,dispose(){lfos.forEach(lfo=>lfo.stop());nodes.forEach(n=>n.disconnect());}};
@@ -43,7 +45,7 @@ export function masterEQ(ctx,settings=DEFAULT_EQ){
   let previousEQ={};const set=(raw,initial=false)=>{const values=eqSettings(raw),t=ctx.currentTime;
     for(const [key,node] of Object.entries({low,mid,high})){if(!initial&&values[key]===previousEQ[key])continue;previousEQ[key]=values[key];
       if(initial)node.gain.value=values[key];
-      else{node.gain.cancelAndHoldAtTime(t);node.gain.linearRampToValueAtTime(values[key],t+.025);}
+      else node.gain.setTargetAtTime(values[key],t,.008);
     }
   };
   set(settings,true);return {input:low,output:high,set,dispose(){low.disconnect();mid.disconnect();high.disconnect();}};
@@ -106,11 +108,11 @@ export function synthNote(ctx,bus,n,instrument,when,duration,normalization=1,set
   const held=(t,s)=>{const age=t-when;if(age<=0)return 0;if(age<s.attack)return peak*age/s.attack;if(age<s.attack+s.decay)return peak*(1-(1-s.sustain)*(age-s.attack)/s.decay);return peak*s.sustain;};
   const valueAt=t=>{if(!points.length||t<points[0][0])return 0;for(let i=1;i<points.length;i++)if(t<=points[i][0]){const [a,x]=points[i-1],[b,y]=points[i];return x+(y-x)*(t-a)/(b-a);}return points.at(-1)[1];};
   const handle={end:0,visualNote(time){return ended||cancelled||time<when||time>=handle.end?null:{pitch:n.pitch+lastSemitones,start:when};},setCloud(raw,t=ctx.currentTime){if(ended||cancelled)return;const s=cloudSettings(raw),amount=s.crush*s.blend;
-    if(!cloud&&amount>0){cloud=noteCloud(ctx,bus,hz,peak,when,off,s);if(cloud){cloud.setPitch(lastSemitones,t);handle.end=Math.max(handle.end,cloud.envelope(soundSettings(lastShape),t));for(const source of sources)source.stop(handle.end);}}
+    if(!cloud&&amount>0&&t<off){cloud=noteCloud(ctx,bus,hz,peak,when,off,s);if(cloud){cloud.setPitch(lastSemitones,t);handle.end=Math.max(handle.end,cloud.envelope(soundSettings(lastShape),t));for(const source of sources)source.stop(handle.end);}}
     cloud?.set(s,t);const target=cloudMix(cloud?amount:0).clean;if(target!==cleanTarget){cleanTarget=target;clean.gain.cancelAndHoldAtTime(t);clean.gain.setTargetAtTime(target,t,.018);}
-  },setPitch(semitones,t=ctx.currentTime){if(ended||cancelled||pitchApplied&&semitones===lastSemitones)return;pitchApplied=true;lastSemitones=semitones;cloud?.setPitch(semitones,t);const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(cents,t+.025);}}},cancel(t){if(ended||cancelled)return;cancelled=true;cloud?.cancel(t);amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
+  },setPitch(semitones,t=ctx.currentTime){if(ended||cancelled||pitchApplied&&semitones===lastSemitones)return;pitchApplied=true;lastSemitones=semitones;cloud?.setPitch(semitones,t);const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.setTargetAtTime(cents,t,.008);}}},cancel(t){if(ended||cancelled)return;cancelled=true;cloud?.cancel(t);amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
     if(ended||cancelled||t>=handle.end&&points.length)return;
-    lastShape=raw;const s=soundSettings(raw),initial=!points.length||t<when,start=initial?when:t;
+    const previousShape=soundSettings(lastShape);lastShape=raw;const s=soundSettings(raw);if(points.length&&t>=off&&s.release===previousShape.release)return;const initial=!points.length||t<when,start=initial?when:t;
     const current=initial?0:valueAt(t),next=[[start,current]];
     if(start<off){
       if(!initial){const bridge=Math.min(off,start+.012);next.push([bridge,held(bridge,s)]);}
@@ -249,7 +251,7 @@ export class Player{
    if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth,visualStart:t,targets:new Map()};}
    this.droneVoice.visualPitch=69+12*Math.log2(hz/440);
    const {osc,gain,lfo,depth,targets}=this.droneVoice;
-   for(const [param,value,kind,seconds] of [[depth.gain,this.drone.wooze*this.drone.wooze*85,'target',.15],[lfo.frequency,.12+this.drone.wooze*.7,'target',.15],[osc.frequency,hz,'exponential',.12],[gain.gain,Math.max(0,Math.min(1,this.drone.level))*.16,'linear',.08]]){if(targets.get(param)===value)continue;targets.set(param,value);param.cancelAndHoldAtTime(t);if(kind==='target')param.setTargetAtTime(value,t,seconds);else if(kind==='exponential')param.exponentialRampToValueAtTime(value,t+seconds);else param.linearRampToValueAtTime(value,t+seconds);}
+   for(const [param,value,kind,seconds] of [[depth.gain,this.drone.wooze*this.drone.wooze*85,'target',.15],[lfo.frequency,.12+this.drone.wooze*.7,'target',.15],[osc.frequency,hz,'exponential',.12],[gain.gain,Math.max(0,Math.min(1,this.drone.level))*.16,'linear',.08]]){if(targets.get(param)===value)continue;targets.set(param,value);param.setTargetAtTime(value,t,kind==='target'?seconds:seconds/3);}
   }
   stopDrone(){if(!this.droneVoice)return;const {osc,gain,lfo,depth}=this.droneVoice;this.droneVoice=null;const t=this.ctx.currentTime;gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(0,t+.05);osc.stop(t+.06);lfo.stop(t+.06);osc.onended=()=>{osc.disconnect();gain.disconnect();lfo.disconnect();depth.disconnect();};}
   setPitchEcho(s){this.pitchEcho=echoSettings({...this.pitchEcho,...s});this.bus?.setEchoLevels(this.pitchEcho.dry,this.pitchEcho.level);if(this.pitchEcho.level===0)this.clearEcho();}
@@ -267,6 +269,6 @@ export class Player{
   setEQ(settings){this.eq=eqSettings(settings);this.bus?.setEQ(this.eq);}
   dispose(){this.stop();this.bus?.dispose();this.bus=null;return this.ctx?.close();}
   setVolume(v){this.volume=v;if(this.bus)this.bus.out.gain.setTargetAtTime(v*.9,this.ctx.currentTime,.02);}
-  setSound(s){const previous=this.sound;this.sound=soundSettings(s);if(previous.pitch!==this.sound.pitch)this.updateDrone();if(previous.hall!==this.sound.hall)this.bus?.setHall(this.sound.hall);if(previous.chorus!==this.sound.chorus)this.bus?.setChorus(this.sound.chorus);if(previous.pitch!==this.sound.pitch&&this.ctx)for(const h of this.handles)h.setPitch(this.playbackPitch()+(h.harmony||0)+(h.drift||0));if(['attack','decay','sustain','release'].some(k=>previous[k]!==this.sound[k])){if(previous.release!==this.sound.release)this.normalize();if(this.ctx)for(const h of this.handles)h.update(this.sound);}}
+  setSound(s){const previous=this.sound;this.sound=soundSettings(s);if(previous.pitch!==this.sound.pitch)this.updateDrone();if(previous.hall!==this.sound.hall)this.bus?.setHall(this.sound.hall);if(previous.chorus!==this.sound.chorus)this.bus?.setChorus(this.sound.chorus);if(previous.pitch!==this.sound.pitch&&this.ctx){const t=this.ctx.currentTime;for(const h of this.handles)h.setPitch(this.playbackPitch()+(h.harmony||0)+(h.drift||0),t);for(const h of this.echoHandles)h.setPitch(this.sound.pitch+this.pitchEcho.wooze*.3*Math.sin((t-h.echoWhen)*2.1),t);}if(['attack','decay','sustain','release'].some(k=>previous[k]!==this.sound[k])){if(previous.release!==this.sound.release)this.normalize();if(this.ctx)for(const h of this.handles)h.update(this.sound);}}
   async retime(c){const tick=this.playing?this.position():0;if(this.playing)await this.play(c,Math.min(tick,c.end));}
 }

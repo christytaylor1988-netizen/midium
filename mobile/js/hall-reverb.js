@@ -43,7 +43,7 @@ export function hallReverb(ctx,settings={}){
  const install=(length,buffer)=>{if(disposed)return;const conv=ctx.createConvolver(),gain=ctx.createGain();conv.buffer=buffer;gain.gain.value=initial?1:0;input.connect(conv);conv.connect(gain);gain.connect(tone);
   const old=current;current={conv,gain,length};if(old){retiring=old;const t=ctx.currentTime+.03,end=t+.08;
    // Feed the new Hall before fading it in; retire only after audio time has advanced.
-   gain.gain.setValueAtTime(0,t);gain.gain.linearRampToValueAtTime(1,end);old.gain.gain.cancelAndHoldAtTime(t);old.gain.gain.linearRampToValueAtTime(0,end);
+   gain.gain.setValueAtTime(0,t);gain.gain.linearRampToValueAtTime(1,end);old.gain.gain.cancelAndHoldAtTime(t);old.gain.gain.setValueAtTime(1,t);old.gain.gain.linearRampToValueAtTime(0,end);
    const finish=()=>{if(disposed)return;if(ctx.currentTime<end+.01){cleanup=setTimeout(finish,20);return;}destroy(old);retiring=null;if(current.length!==boundedLength()&&state.space>0)queueReplace();};cleanup=setTimeout(finish,150);}
  };
  const replace=()=>{if(disposed||workerBusy||retiring||current?.length===boundedLength()||(!initial&&state.space<=0))return;const length=boundedLength();

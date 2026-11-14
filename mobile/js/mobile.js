@@ -1,10 +1,10 @@
-import {spectrumPicker} from './spectrum-picker.js?v=mobile-v13';
+import {spectrumPicker} from './spectrum-picker.js?v=mobile-v14';
 import {colourConfiguration,PRESET_COLOURS} from './colour-sound.js?v=mobile-v12-hue';
 import {PRESETS} from './presets.js?v=mobile-v11-presets';
 import {FONTS,loadFonts,rasterize} from './glyphs.js?v=1.2.0';
 import {makeComposition,INSTRUMENTS,PPQ} from './events.js?v=mk1r11';
-import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v13';
-import {DEFAULT_TEXTURE} from './texture-core.js?v=mobile-v11-glitch';
+import {Player,DEFAULT_SOUND} from './audio.js?v=mobile-v14';
+import {DEFAULT_TEXTURE} from './texture-core.js?v=mobile-v14';
 import {DEFAULT_ECHO} from './pitch-echo.js?v=mobile-v11';
 import {PianoRoll} from './piano-roll.js?v=mobile-v11-piano';
 const $=id=>document.getElementById(id),roll=new PianoRoll($('rollViewport'),$('roll'),$('rollSurface'),$('playhead'));
