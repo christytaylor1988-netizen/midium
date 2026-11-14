@@ -1,6 +1,7 @@
-import {DEFAULT_ECHO,echoSettings,echoPitch,echoAttenuation,echoFragment} from './pitch-echo.js?v=mk1r13';
+import {noteCloud,cloudSettings,cloudMix} from './note-cloud.js?v=mobile-v11-presence';
+import {DEFAULT_ECHO,echoSettings,echoPitch,echoAttenuation,echoFragment} from './pitch-echo.js?v=mobile-v11';
 import {hallReverb} from './hall-reverb.js?v=mk1r13';
-import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mk1r13';
+import {DEFAULT_TEXTURE,prepareTextures,textureStage} from './texture-core.js?v=mobile-v11-glitch';
 import {PPQ,INSTRUMENTS,maxPolyphony} from './events.js?v=mk1r11';
 // Playback-only settings: never written into the composition or exported notes.
 export const DEFAULT_SOUND=Object.freeze({attack:.175,decay:.35,sustain:.35,release:1.25,hall:0,chorus:0,pitch:0});
@@ -77,36 +78,39 @@ function soundStage(ctx,hall,chorus,destination,textures=DEFAULT_TEXTURE,onStatu
 }
 export function outputBus(ctx,volume=.65,hall=DEFAULT_SOUND.hall,chorus=0,eq=DEFAULT_EQ,delay=DEFAULT_DELAY,textures=DEFAULT_TEXTURE,onStatus=()=>{}){
   // Stable master processing boundary, downstream of the resettable source/delay stages.
-  const processingInput=ctx.createGain(),equalizer=masterEQ(ctx,eq),compressor=ctx.createDynamicsCompressor(),limit=ctx.createWaveShaper(),out=ctx.createGain();
+  const processingInput=ctx.createGain(),equalizer=masterEQ(ctx,eq),compressor=ctx.createDynamicsCompressor(),limit=ctx.createWaveShaper(),out=ctx.createGain(),playbackFade=ctx.createGain();
   compressor.threshold.value=-14;compressor.knee.value=15;compressor.ratio.value=8;compressor.attack.value=.003;compressor.release.value=.1;
   const curve=new Float32Array(4097);for(let i=0;i<curve.length;i++){const x=i/(curve.length-1)*2-1;curve[i]=Math.abs(x)<.8?x:Math.sign(x)*(.8+.2*Math.tanh((Math.abs(x)-.8)/.2));}limit.curve=curve;
-  // Moderate +2.9 dB pre-protection lift; final trim retains 10% peak headroom.
+  // Mobile output: +15% before compression/limiting; final trim keeps 10% peak headroom.
   // EQ covers dry sound AND effect returns, before the original protection stages.
-  processingInput.connect(equalizer.input);equalizer.output.connect(compressor);compressor.connect(limit);limit.connect(out);out.connect(ctx.destination);out.gain.value=volume*.9;processingInput.gain.value=1.4;
+  processingInput.connect(equalizer.input);equalizer.output.connect(compressor);compressor.connect(limit);limit.connect(out);out.connect(playbackFade);playbackFade.connect(ctx.destination);out.gain.value=volume*.9;processingInput.gain.value=1.4*1.15;
   let echo=digitalDelay(ctx,delay);echo.output.connect(processingInput);
   let stage=soundStage(ctx,hall,chorus,echo.input,textures,onStatus),disposed=false;const sourceGain=ctx.createGain(),echoGain=ctx.createGain();sourceGain.connect(stage.input);echoGain.connect(stage.input);echoGain.gain.value=0;
-  return {get mix(){return sourceGain;},get echoInput(){return echoGain;},get droneInput(){return stage.input;},setEchoLevels(dry,level){const t=ctx.currentTime;sourceGain.gain.cancelAndHoldAtTime(t);sourceGain.gain.setTargetAtTime(dry,t,.008);echoGain.gain.cancelAndHoldAtTime(t);echoGain.gain.setTargetAtTime(level,t,.008);},processingInput,out,setEQ:equalizer.set,
+  return {get mix(){return sourceGain;},get echoInput(){return echoGain;},get droneInput(){return stage.input;},setEchoLevels(dry,level){const t=ctx.currentTime;sourceGain.gain.cancelAndHoldAtTime(t);sourceGain.gain.setTargetAtTime(dry,t,.008);echoGain.gain.cancelAndHoldAtTime(t);echoGain.gain.setTargetAtTime(level,t,.008);},processingInput,out,playbackFade,setEQ:equalizer.set,
     setTextures(settings){textures={...DEFAULT_TEXTURE,...settings};stage.setTextures(textures);},
     setDelay(settings){delay=delaySettings(settings);echo.set(delay);},
     setHall(amount){hall=amount;stage.setHall(amount);},
     setChorus(amount){chorus=amount;stage.setChorus(amount);},
     clear(){if(disposed)return;stage.dispose();echo.dispose();echo=digitalDelay(ctx,delay);echo.output.connect(processingInput);stage=soundStage(ctx,hall,chorus,echo.input,textures,onStatus);sourceGain.disconnect();echoGain.disconnect();sourceGain.connect(stage.input);echoGain.connect(stage.input);},
-    dispose(){if(disposed)return;disposed=true;stage.dispose();echo.dispose();out.gain.cancelAndHoldAtTime(ctx.currentTime);out.gain.linearRampToValueAtTime(0,ctx.currentTime+.025);setTimeout(()=>{equalizer.dispose();for(const n of [processingInput,compressor,limit,out,sourceGain,echoGain])n.disconnect();},60);}
+    dispose(){if(disposed)return;disposed=true;stage.dispose();echo.dispose();out.gain.cancelAndHoldAtTime(ctx.currentTime);out.gain.linearRampToValueAtTime(0,ctx.currentTime+.025);setTimeout(()=>{equalizer.dispose();for(const n of [processingInput,compressor,limit,out,playbackFade,sourceGain,echoGain])n.disconnect();},60);}
   };
 }
 const voiceWaves=new WeakMap();
-export function synthNote(ctx,bus,n,instrument,when,duration,normalization=1,settings=DEFAULT_SOUND){
+export function synthNote(ctx,bus,n,instrument,when,duration,normalization=1,settings=DEFAULT_SOUND,cloudOptions=null){
   const p=INSTRUMENTS[instrument],osc=ctx.createOscillator(),amp=ctx.createGain(),nodes=[osc,amp],sources=[osc],pitchSources=[osc];
   const hz=440*2**((n.pitch-69)/12);
   let waves=voiceWaves.get(ctx);if(!waves){waves=new Map();voiceWaves.set(ctx,waves);}if(!waves.has(instrument)){const real=new Float32Array(p.partials.length+1),imag=new Float32Array(real.length);p.partials.forEach((v,i)=>imag[i+1]=v);waves.set(instrument,ctx.createPeriodicWave(real,imag));}osc.setPeriodicWave(waves.get(instrument));osc.frequency.setValueAtTime(hz*(p.glide||1),when);if(p.glide)osc.frequency.exponentialRampToValueAtTime(hz,when+.035);
-  const peak=.13*normalization*n.velocity/127,off=when+duration;let points=[],ended=false,cancelled=false;
+  const peak=.13*normalization*n.velocity/127,off=when+duration;let points=[],ended=false,cancelled=false,cloud=null,lastShape=settings,lastSemitones=soundSettings(settings).pitch;const clean=ctx.createGain();nodes.push(clean);
   // A queued oscillator must remain silent before its envelope begins.
   amp.gain.value=0;
   const held=(t,s)=>{const age=t-when;if(age<=0)return 0;if(age<s.attack)return peak*age/s.attack;if(age<s.attack+s.decay)return peak*(1-(1-s.sustain)*(age-s.attack)/s.decay);return peak*s.sustain;};
   const valueAt=t=>{if(!points.length||t<points[0][0])return 0;for(let i=1;i<points.length;i++)if(t<=points[i][0]){const [a,x]=points[i-1],[b,y]=points[i];return x+(y-x)*(t-a)/(b-a);}return points.at(-1)[1];};
-  const handle={end:0,setPitch(semitones,t=ctx.currentTime){if(ended||cancelled)return;const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(cents,t+.025);}}},cancel(t){if(ended||cancelled)return;cancelled=true;amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
+  const handle={end:0,visualNote(time){return ended||cancelled||time<when||time>=handle.end?null:{pitch:n.pitch+lastSemitones,start:when};},setCloud(raw,t=ctx.currentTime){if(ended||cancelled)return;const s=cloudSettings(raw),amount=s.crush*s.blend;
+    if(!cloud&&amount>0){cloud=noteCloud(ctx,bus,hz,peak,when,off,s);if(cloud){cloud.setPitch(lastSemitones,t);handle.end=Math.max(handle.end,cloud.envelope(soundSettings(lastShape),t));for(const source of sources)source.stop(handle.end);}}
+    cloud?.set(s,t);clean.gain.cancelAndHoldAtTime(t);clean.gain.setTargetAtTime(cloudMix(cloud?amount:0).clean,t,.018);
+  },setPitch(semitones,t=ctx.currentTime){if(ended||cancelled)return;lastSemitones=semitones;cloud?.setPitch(semitones,t);const cents=Math.max(-60,Math.min(60,semitones))*100;for(const source of pitchSources){const param=source.detune;if(t<=when){param.cancelScheduledValues(ctx.currentTime);param.setValueAtTime(cents,ctx.currentTime);}else{param.cancelAndHoldAtTime(t);param.linearRampToValueAtTime(cents,t+.025);}}},cancel(t){if(ended||cancelled)return;cancelled=true;cloud?.cancel(t);amp.gain.cancelAndHoldAtTime(t);amp.gain.linearRampToValueAtTime(0,t+.025);for(const source of sources)source.stop(t+.03);handle.end=t+.03;},update(raw,t=ctx.currentTime){
     if(ended||cancelled||t>=handle.end&&points.length)return;
-    const s=soundSettings(raw),initial=!points.length||t<when,start=initial?when:t;
+    lastShape=raw;const s=soundSettings(raw),initial=!points.length||t<when,start=initial?when:t;
     const current=initial?0:valueAt(t),next=[[start,current]];
     if(start<off){
       if(!initial){const bridge=Math.min(off,start+.012);next.push([bridge,held(bridge,s)]);}
@@ -120,12 +124,12 @@ export function synthNote(ctx,bus,n,instrument,when,duration,normalization=1,set
       next.push([end,0]);
     }
     if(initial)amp.gain.cancelScheduledValues(start);else amp.gain.cancelAndHoldAtTime(start);amp.gain.setValueAtTime(current,start);for(let i=1;i<next.length;i++)amp.gain.linearRampToValueAtTime(next[i][1],next[i][0]);
-    points=next;handle.end=next.at(-1)[0]+.015;for(const source of sources)source.stop(handle.end);
+    points=next;handle.end=Math.max(next.at(-1)[0]+.015,cloud?cloud.envelope(s,t):0);for(const source of sources)source.stop(handle.end);
   }};
-  osc.connect(amp);amp.connect(bus);
+  osc.connect(amp);amp.connect(clean);clean.connect(bus);
   if(p.fm){const mod=ctx.createOscillator(),depth=ctx.createGain();mod.frequency.value=hz*p.fm;depth.gain.setValueAtTime(hz*p.depth,when);depth.gain.exponentialRampToValueAtTime(hz*.02,when+Math.min(.5,duration));mod.connect(depth);depth.connect(osc.frequency);sources.push(mod);pitchSources.push(mod);nodes.push(mod,depth);}
   if(p.vibrato){const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=p.vibrato;depth.gain.value=7;lfo.connect(depth);depth.connect(osc.detune);sources.push(lfo);nodes.push(lfo,depth);}
-  for(const source of sources)source.start(when);handle.setPitch(soundSettings(settings).pitch,when);handle.update(settings,when);osc.onended=()=>{ended=true;nodes.forEach(x=>x.disconnect());};return handle;
+  for(const source of sources)source.start(when);if(cloudOptions)handle.setCloud(cloudOptions);handle.setPitch(soundSettings(settings).pitch,when);handle.update(settings,when);osc.onended=()=>{ended=true;cloud?.dispose();nodes.forEach(x=>x.disconnect());};return handle;
 }
 // Deterministic, playback-only scale selection. Amount selects a stable subset of notes.
 export function harmonyPitch(note,mode='original',amount=1){
@@ -180,7 +184,7 @@ export class Player{
     if(this.loop){let base=0;const edges=[],length=this.c.end;for(const n of notes){base+=Math.floor(n.duration/length);const rem=n.duration%length,end=n.start+rem;if(rem===0)continue;if(end>length){base++;edges.push([end-length,-1],[n.start,1]);}else edges.push([n.start,1],[end,-1]);}edges.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);count=base;for(const [,change]of edges){base+=change;count=Math.max(count,base);}}
     this.normalization=1/Math.sqrt(Math.max(4,count));
   }
-  schedule(n){const seconds=60/(this.c.tempo*this.speed*PPQ),when=this.origin+(n.start-this.startTick)*seconds;if(when+n.duration*seconds<this.ctx.currentTime)return;const h=synthNote(this.ctx,this.bus.mix,n,this.c.instrument,Math.max(this.ctx.currentTime,when+this.textures.drift*.025*Math.sin(n.start*.017)),n.duration*seconds,this.normalization,this.sound);h.note=n;h.harmony=harmonyPitch(n,this.harmonyMode,this.harmonyAmount??0)-n.pitch;h.startTick=n.start;h.drift=this.textures.drift*1.5*Math.sin(n.start*.003+this.ctx.currentTime*.19);h.setPitch(this.playbackPitch()+h.harmony+h.drift,Math.max(this.ctx.currentTime,when));this.handles.push(h);if(this.pitchEcho.level>0)this.queueEcho({note:{...n,pitch:n.pitch+h.harmony},when:Math.max(this.ctx.currentTime,when)+.35,duration:n.duration*seconds,instrument:this.c.instrument,repeat:1,normalization:this.normalization,sourceTick:n.start});}
+  schedule(n){const seconds=60/(this.c.tempo*this.speed*PPQ),when=this.origin+(n.start-this.startTick)*seconds;if(when+n.duration*seconds<this.ctx.currentTime)return;const h=synthNote(this.ctx,this.bus.mix,n,this.c.instrument,Math.max(this.ctx.currentTime,when+this.textures.drift*.025*Math.sin(n.start*.017)),n.duration*seconds,this.normalization,this.sound,this.textures);h.note=n;h.harmony=harmonyPitch(n,this.harmonyMode,this.harmonyAmount??0)-n.pitch;h.startTick=n.start;h.drift=this.textures.drift*1.5*Math.sin(n.start*.003+this.ctx.currentTime*.19);h.setPitch(this.playbackPitch()+h.harmony+h.drift,Math.max(this.ctx.currentTime,when));this.handles.push(h);if(this.pitchEcho.level>0)this.queueEcho({note:{...n,pitch:n.pitch+h.harmony},when:Math.max(this.ctx.currentTime,when)+.35,duration:n.duration*seconds,instrument:this.c.instrument,repeat:1,normalization:this.normalization,sourceTick:n.start});}
   pump(){
     if(!this.playing)return;if(this.lastPump&&this.ctx.currentTime-this.lastPump>.15){const tick=this.tick();this.cycle=Math.floor(tick/this.c.end);this.index=this.c.notes.findIndex(n=>n.start>=tick%this.c.end);if(this.index<0)this.index=this.c.notes.length;}this.lastPump=this.ctx.currentTime;const ahead=this.tick()+this.c.tempo*this.speed*PPQ/60*.12;
     while(this.c.notes.length){
@@ -200,7 +204,33 @@ export class Player{
   position(){const t=this.tick();return this.loop||t<this.endAt? t%this.c.end:this.c.end;}
   tick(){return this.startTick+Math.max(0,this.ctx.currentTime-this.origin)*this.c.tempo*this.speed*PPQ/60;}
   animate(){if(!this.playing)return;const t=this.tick();this.onTick(this.position());if(t>=this.endAt){clearInterval(this.timer);this.playing=false;this.stopDrone();this.echoTimer=setInterval(()=>{try{this.pumpEcho();if(!this.echoQueue.length){clearInterval(this.echoTimer);}}catch(e){clearInterval(this.echoTimer);this.clearEcho();this.onAudioStatus?.('Echo stopped: '+e.message,true);}},25);this.onEnd();return;}this.frame=requestAnimationFrame(()=>this.animate());}
-  stop(reset=true){clearInterval(this.echoTimer);this.clearEcho();this.stopDrone();this.generation++;clearInterval(this.timer);cancelAnimationFrame(this.frame);if(this.ctx)for(const h of this.handles)h.cancel(this.ctx.currentTime);this.handles=[];this.bus?.dispose();this.bus=null;this.playing=false;if(reset)this.onTick(0);this.onEnd();}
+  finishFade(){
+    const fading=this.fading;if(!fading)return;this.fading=null;clearTimeout(fading.timer);
+    const t=this.ctx.currentTime;for(const h of fading.handles)h.cancel(t);
+    if(fading.drone){const {osc,gain,lfo,depth}=fading.drone;gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(0,t+.025);osc.stop(t+.03);lfo.stop(t+.03);osc.onended=()=>{osc.disconnect();gain.disconnect();lfo.disconnect();depth.disconnect();};}
+    fading.bus.dispose();
+  }
+  stopWithFade(){
+    if(this.fading)return;
+    if(!this.bus||!this.ctx){this.stop();return;}
+    const now=this.ctx.currentTime,tick=this.c?this.tick():0;
+    this.generation++;clearInterval(this.timer);clearInterval(this.echoTimer);cancelAnimationFrame(this.frame);
+    // Cancel look-ahead notes only; sounding voices and all effect tails fade together.
+    for(const h of this.handles)if(h.startTick>tick)h.cancel(now);
+    for(const h of this.echoHandles)if(h.echoWhen>now)h.cancel(now);
+    this.echoQueue=[];this.nextSparseEcho=-Infinity;
+    const fading={bus:this.bus,handles:[...this.handles,...this.echoHandles],drone:this.droneVoice};
+    this.fading=fading;this.bus=null;this.handles=[];this.echoHandles=[];this.droneVoice=null;this.playing=false;
+    const gain=fading.bus.playbackFade.gain;gain.cancelAndHoldAtTime(now);gain.linearRampToValueAtTime(0,now+1.5);
+    fading.timer=setTimeout(()=>{if(this.fading===fading)this.finishFade();},1500);
+    this.onTick(0);this.onEnd();
+  }
+  stop(reset=true){this.finishFade();clearInterval(this.echoTimer);this.clearEcho();this.stopDrone();this.generation++;clearInterval(this.timer);cancelAnimationFrame(this.frame);if(this.ctx)for(const h of this.handles)h.cancel(this.ctx.currentTime);this.handles=[];this.bus?.dispose();this.bus=null;this.playing=false;if(reset)this.onTick(0);this.onEnd();}
+  soundingNotes(){
+    if(!this.playing||!this.ctx)return [];const now=this.ctx.currentTime,notes=[];
+    for(const h of [...(this.pitchEcho.dry>0?this.handles:[]),...(this.pitchEcho.level>0?this.echoHandles:[])]){const n=h.visualNote(now);if(n)notes.push(n);}
+    if(this.droneVoice&&this.drone.level>0)notes.push({pitch:this.droneVoice.visualPitch,start:this.droneVoice.visualStart});return notes;
+  }
   playbackPitch(){return this.sound.pitch+(this.speedMode==='pitch'?12*Math.log2(this.speed):0);}
   setSpeed(value,mode=this.speedMode){
     const speed=Number.isFinite(value)?Math.max(.125,Math.min(4,value)):1;if(speed===this.speed&&mode===this.speedMode)return;
@@ -209,12 +239,13 @@ export class Player{
     if(this.ctx)for(const h of this.handles)h.setPitch(this.playbackPitch()+(h.harmony||0)+(h.drift||0));if(this.playing)this.pump();
   }
   setHarmony(mode,amount){this.harmonyMode=mode;this.updateDrone();this.harmonyAmount=Math.max(0,Math.min(1,amount));if(this.ctx)for(const h of this.handles){h.harmony=harmonyPitch(h.note,mode,this.harmonyAmount)-h.note.pitch;h.setPitch(this.playbackPitch()+h.harmony+(h.drift||0));}}
-  setTextures(settings){this.textures={...DEFAULT_TEXTURE,...settings};this.bus?.setTextures(this.textures);}
+  setTextures(settings){const before=cloudSettings(this.textures);this.textures={...DEFAULT_TEXTURE,...settings};this.bus?.setTextures(this.textures);const after=cloudSettings(this.textures);if(Object.keys(after).some(k=>after[k]!==before[k]))for(const h of this.handles)h.setCloud(this.textures);}
   setDrone(settings){this.drone={...this.drone,...settings};this.updateDrone();}
   updateDrone(){
    if(!this.playing||!this.drone.on||!this.c?.notes.length){this.stopDrone();return;}
    const ctx=this.ctx,t=ctx.currentTime,hz=440*Math.pow(2,(dronePitch(this.c,this.harmonyMode,this.drone.note,this.drone.octave)+this.sound.pitch-69)/12);
-   if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth};}
+   if(!this.droneVoice){const gain=ctx.createGain(),osc=ctx.createOscillator();osc.type='sine';gain.gain.value=0;osc.frequency.value=hz;osc.connect(gain);gain.connect(this.bus.droneInput);osc.start();const lfo=ctx.createOscillator(),depth=ctx.createGain();lfo.frequency.value=.19;depth.gain.value=0;lfo.connect(depth);depth.connect(osc.detune);lfo.start();this.droneVoice={osc,gain,lfo,depth,visualStart:t};}
+   this.droneVoice.visualPitch=69+12*Math.log2(hz/440);
    const {osc,gain,lfo,depth}=this.droneVoice;depth.gain.setTargetAtTime(this.drone.wooze*this.drone.wooze*85,t,.15);lfo.frequency.setTargetAtTime(.12+this.drone.wooze*.7,t,.15);osc.frequency.cancelAndHoldAtTime(t);osc.frequency.exponentialRampToValueAtTime(hz,t+.12);gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(Math.max(0,Math.min(1,this.drone.level))*.16,t+.08);
   }
   stopDrone(){if(!this.droneVoice)return;const {osc,gain,lfo,depth}=this.droneVoice;this.droneVoice=null;const t=this.ctx.currentTime;gain.gain.cancelAndHoldAtTime(t);gain.gain.linearRampToValueAtTime(0,t+.05);osc.stop(t+.06);lfo.stop(t+.06);osc.onended=()=>{osc.disconnect();gain.disconnect();lfo.disconnect();depth.disconnect();};}

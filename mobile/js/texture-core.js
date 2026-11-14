@@ -1,7 +1,7 @@
 // Bounded, audio-derived MK1 textures. Shared by AudioWorklet and fallback.
 export const DEFAULT_TEXTURE=Object.freeze({reverse:0,reverseTime:.6,crush:0,drift:0,glitch:0,glitchRate:25,glitchRandom:0,space:.18,tone:.5,decay:3.4,stutter:0,stutterMs:60});
 export class TextureCore {
- constructor(rate){this.rate=rate;this.p={...DEFAULT_TEXTURE};this.s={...DEFAULT_TEXTURE};this.n=Math.ceil(rate*12);this.hist=[new Float32Array(this.n),new Float32Array(this.n)];this.recent=[new Float32Array(Math.ceil(rate)),new Float32Array(Math.ceil(rate))];this.rev=[];this.pos=0;this.phase=0;this.holdBlend=0;this.revNext=0;this.crushed=[0,0];this.glitchPhase=0;this.glitchLength=rate*.025;this.glitchLeft=0;this.glitchBlend=0;this.glitchNext=rate;this.glitchRead=0;this.randomSeed=77123;this.keys=['reverse','reverseTime','crush','glitch','glitchRate','glitchRandom','stutter','stutterMs'];this.grainLists=[this.rev];this.holdReader=this.reader();this.glitchReader=this.reader();this.crushPhase=1;this.glitchIntensity=1;this.window=Float32Array.from({length:1025},(_,i)=>.5-.5*Math.cos(2*Math.PI*i/1024));}
+ constructor(rate){this.rate=rate;this.p={...DEFAULT_TEXTURE};this.s={...DEFAULT_TEXTURE};this.n=Math.ceil(rate*12);this.hist=[new Float32Array(this.n),new Float32Array(this.n)];this.recent=[new Float32Array(Math.ceil(rate)),new Float32Array(Math.ceil(rate))];this.rev=[];this.pos=0;this.phase=0;this.holdBlend=0;this.revNext=0;this.glitchLeft=0;this.glitchNext=rate;this.randomSeed=77123;this.keys=['reverse','reverseTime','glitch','glitchRate','glitchRandom','stutter','stutterMs'];this.grainLists=[this.rev];this.holdReader=this.reader();this.glitchIntensity=1;this.autoHeld=false;this.manualHeld=false;this.randomRate=1;this.window=Float32Array.from({length:1025},(_,i)=>.5-.5*Math.cos(2*Math.PI*i/1024));}
  rand(){this.randomSeed=(Math.imul(this.randomSeed,1664525)+1013904223)>>>0;return this.randomSeed/4294967296;}
  set(raw){for(const k in this.p)if(Number.isFinite(raw[k]))this.p[k]=k==='decay'?Math.max(.5,Math.min(60,raw[k])):k==='reverseTime'?Math.max(.1,Math.min(5,raw[k])):['stutterMs','glitchRate'].includes(k)?Math.max(5,Math.min(250,raw[k])):Math.max(0,Math.min(1,raw[k]));}
 
@@ -19,49 +19,52 @@ export class TextureCore {
   for(let i=0;i<frames;i++){
    for(const k of this.keys)this.s[k]+=(this.p[k]-this.s[k])*.001;
    const s=this.s;
-   if((this.pos&15)===0||!this.coeff)this.coeff={crushSteps:Math.pow(2,16-s.crush*13)};
-   const active=s.reverse+s.crush+s.glitch+s.stutter> .00001;
-   if(!active&&this.holdBlend<.00001&&this.glitchBlend<.00001){for(let c=0;c<2;c++){const v=input[c]?.[i]??input[0]?.[i]??0;this.hist[c][this.pos%this.n]=v;this.recent[c][this.pos%this.recent[c].length]=v;if(output[c])output[c][i]=v;}this.rev.length=0;this.pos++;continue;}
+   const active=s.reverse+s.glitch+s.stutter> .00001;
+   if(!active&&this.holdBlend<.00001){for(let c=0;c<2;c++){const v=input[c]?.[i]??input[0]?.[i]??0;this.hist[c][this.pos%this.n]=v;this.recent[c][this.pos%this.recent[c].length]=v;if(output[c])output[c][i]=v;}this.rev.length=0;this.pos++;continue;}
 
-   const held=s.stutter>.5;
-   if(held&&!this.held)this.captureReader(this.holdReader,this.recent,s.stutterMs*this.rate/1000);this.held=held;
-   this.lengthReader(this.holdReader,s.stutterMs*this.rate/1000);
-
+   // One captured-fragment reader serves manual and automatic stutter.
+   // Manual input owns it until release; automatic timing pauses underneath.
+   const manual=s.stutter>.5,enabled=this.p.glitch>0;
+   let trigger=false;
+   if(!manual){
+    if(!enabled){this.glitchLeft=0;this.glitchNext=0;}
+    else if(this.glitchLeft<=0){
+     // Recalculate a shrinking wait immediately when AMOUNT is raised.
+     const gap=.012+1.8*Math.pow(1-s.glitch,2);
+     if(!this.p.glitchRandom)this.glitchNext=Math.min(this.glitchNext,this.rate*gap);
+     if(--this.glitchNext<=0){
+      const random=this.p.glitchRandom>.5,a=s.glitch;
+      const duration=.07+.48*a;
+      this.glitchLeft=this.rate*duration*(random?.4+this.rand()*1.2:1);
+      this.glitchNext=this.rate*gap*(random?(this.rand()<.18?2+this.rand()*3:.2+this.rand()*1.6):1);
+      this.glitchIntensity=random?.75+.25*this.rand():1;
+      this.randomRate=random?.35+this.rand()*1.3:1;
+      trigger=true;
+     }
+    }
+   }
+   const automatic=!manual&&enabled&&this.glitchLeft>0;
+   const held=manual||automatic;
+   const length=automatic?Math.max(5,Math.min(250,s.glitchRate*this.randomRate)):s.stutterMs;
+   if((manual&&!this.manualHeld)||(automatic&&(trigger||this.manualHeld)))this.captureReader(this.holdReader,this.recent,length*this.rate/1000);
+   this.held=held;this.manualHeld=manual;this.autoHeld=automatic;
+   this.lengthReader(this.holdReader,length*this.rate/1000);
 
    if(s.reverse>.001&&(this.revNext=Math.min(this.revNext,this.rate*s.reverseTime*.5))-1<=0){this.spawn(this.rev,true);this.revNext=this.rate*s.reverseTime*.5;}else this.revNext--;
 
-   if(this.glitchLeft<=0&&--this.glitchNext<=0){
-    const random=s.glitchRandom>.5;
-    this.glitchNext=this.rate*(random?(this.rand()<.18?.5+this.rand()*2:(.02+Math.pow(1-s.glitch,2)*4)*(.15+this.rand()*1.8)):.035+Math.pow(1-s.glitch,2)*4);
-    if(s.glitch>.001){
-     this.glitchLeft=this.rate*(random?.012+this.rand()*.4:.15);
-     this.glitchIntensity=random?s.glitch*(.2+.8*this.rand()):s.glitch;
-     this.glitchLength=this.rate*(random?5+(s.glitchRate-5)*this.rand():s.glitchRate)/1000;
-     this.captureReader(this.glitchReader,this.hist,this.glitchLength);
-    }
-   }
-   this.glitchBlend+=((this.glitchLeft>0&&s.glitch>.001?this.glitchIntensity:0)-this.glitchBlend)*.006;
-   // The chosen fragment stays fixed for the event, including RANDOM.
-   this.crushPhase+=1/(1+s.crush*63);
-   const crushUpdate=this.crushPhase>=1;if(crushUpdate)this.crushPhase%=1;
+   // Random choices stay fixed per burst; live RATE moves the same reader smoothly.
    let left=0,right=0;
    for(let c=0;c<2;c++){
     const raw=input[c]?.[i]??input[0]?.[i]??0,dry=Number.isFinite(raw)?raw:0;this.hist[c][this.pos%this.n]=dry;
     let v=dry*(1-s.reverse)+this.grain(this.rev,c)*s.reverse;
-    if(this.glitchBlend>.00001){const sample=this.sampleReader(this.glitchReader,c);v=v*(1-this.glitchBlend)+sample*this.glitchBlend;}
-    if(s.crush>.00001){
-    const {crushSteps}=this.coeff;
-    if(crushUpdate)this.crushed[c]=Math.round(v*8*crushSteps)/(8*crushSteps);
-    v=v*(1-s.crush)+this.crushed[c]*s.crush;
-    }
-    if(!Number.isFinite(v)){v=dry;this.crushed[c]=0;}
+    if(!Number.isFinite(v))v=dry;
     this.recent[c][this.pos%this.recent[c].length]=v;
     if(this.holdBlend>.00001){const held=this.sampleReader(this.holdReader,c);v=v*(1-this.holdBlend)+held*this.holdBlend;}
     if(c===0)left=v;else right=v;
    }
-   this.holdBlend+=(this.held?1-this.holdBlend:-this.holdBlend)*.01;this.phase++;
+   this.holdBlend+=((manual?1:automatic?this.glitchIntensity:0)-this.holdBlend)*.01;this.phase++;
    output[0][i]=Math.max(-1,Math.min(1,left));if(output[1])output[1][i]=Math.max(-1,Math.min(1,right));
-   this.advanceReader(this.holdReader);this.advanceReader(this.glitchReader);this.pos++;this.glitchLeft--;this.glitchPhase++;
+   this.advanceReader(this.holdReader);this.pos++;if(!manual)this.glitchLeft--;
    for(const list of this.grainLists)for(let j=list.length-1;j>=0;j--)if(++list[j].age>=list[j].len)list.splice(j,1);
   }
  }
@@ -84,7 +87,7 @@ export function textureStage(ctx,settings=DEFAULT_TEXTURE,onStatus=()=>{}){
  const detach=()=>{if(!node)return;input.disconnect(node);node.disconnect();node.onprocessorerror=null;if(core)node.onaudioprocess=null;else{node.port.postMessage({dispose:true});node.port.close();}node=null;};
  const recover=()=>{if(disposed)return;failed=true;blend(false);onStatus('Audio effect interrupted; restoring sound.');clearTimeout(retryTimer);retryTimer=setTimeout(()=>{if(disposed)return;detach();if(++retries>2){onStatus('Texture processor unavailable. Dry audio continues; press STOP then PLAY to retry.',true);return;}try{create();failed=false;set(state,true);onStatus('Audio recovered.');}catch(e){onStatus('Texture processor unavailable. Dry audio continues; press STOP then PLAY to retry.',true);}},60);};
  const create=()=>{if(ctx._midiumTextures){core=null;node=new AudioWorkletNode(ctx,'midium-mk1',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2]});node.onprocessorerror=recover;}else{core=new TextureCore(ctx.sampleRate);node=ctx.createScriptProcessor(2048,2,2);node.onaudioprocess=e=>{try{core.process([e.inputBuffer.getChannelData(0),e.inputBuffer.getChannelData(1)],[e.outputBuffer.getChannelData(0),e.outputBuffer.getChannelData(1)]);}catch(error){recover();}};}input.connect(node);node.connect(wet);};
- const set=(s,force=false)=>{if(!initial&&!force&&Object.keys(s).every(k=>s[k]===state[k]))return;state={...state,...s};if(failed)return;if(core)core.set(state);else node.port.postMessage(state);blend(['reverse','crush','glitch','stutter'].some(k=>state[k]>0));initial=false;};
+ const set=(s,force=false)=>{if(!initial&&!force&&Object.keys(s).every(k=>s[k]===state[k]))return;state={...state,...s};if(failed)return;if(core)core.set(state);else node.port.postMessage(state);blend(['reverse','glitch','stutter'].some(k=>state[k]>0));initial=false;};
  create();set(settings);
  return {input,output,set,get processor(){return node;},dispose(){disposed=true;clearTimeout(retryTimer);detach();for(const n of [input,output,dry,wet])n.disconnect();}};
 }
