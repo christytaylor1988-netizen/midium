@@ -1,3 +1,11 @@
+# Recording removal follow-up — 16 November 2026
+
+The published desktop and mobile interfaces no longer include recording controls, capture/encoding modules, or recording event handlers. The audio engine and all DSP files are byte-identical to V1.5 commit `0c6abd9`. Recording-specific regression expectations now assert that no recording controls exist; audio probes, presets, parity, notation and exports remain covered. The stress test continues live hue/pitch changes without recording.
+
+Complete original implementation preserved and verified on remote branch `backup/v1.5-recording-for-future-pro`, pointing to `0c6abd9ad7b801311a339b8df0bc01a6a4665c9d`. This is a backup only; no PRO edition exists.
+
+The following is the historical V1.5 alignment report. Its recording results describe the backup version, not current published functionality.
+
 # Desktop/mobile alignment validation — 16 November 2026
 
 ## Inspected baseline and backup

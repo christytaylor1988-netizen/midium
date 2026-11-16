@@ -1,5 +1,4 @@
 import {PARAMETERS,DEFAULT_CONTROLS as defaults} from './parameters.js?v=aligned-v15';
-import {WavRecorder,saveRecording} from './recorder.js?v=aligned-v15';
 import {exportMidi,download} from './midi.js?v=aligned-v15';
 import {exportMusicXML} from './notation.js?v=aligned-v15';
 import {spectrumPicker} from './spectrum-picker.js?v=aligned-v15';
@@ -113,16 +112,6 @@ reset();try{await loadFonts();ready=true;generate();}catch(e){status('Unable to 
 for(const [id,ext,mime,fn]of [['midi','mid','audio/midi',exportMidi],['musicxml','musicxml','application/vnd.recordare.musicxml+xml',exportMusicXML]])$(id).onclick=()=>{try{if(composition)download(fn(composition),filenameOf(composition)+'.'+ext,mime);}catch(e){status(e.message,true);}};
 let pdfReady;
 $('pdf').onclick=async()=>{if(!composition||$('pdf').disabled)return;$('pdf').disabled=true;try{pdfReady??=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=new URL('../vendor/jspdf.umd.min.js',import.meta.url).href;script.onload=resolve;script.onerror=()=>{pdfReady=null;reject(Error('PDF library could not load.'));};document.head.append(script);});await pdfReady;const score=await loadNotation();const data=await score.pdf(composition);scoreRendered=composition;frameScore(composition);download(data,filenameOf(composition)+'.pdf','application/pdf');}catch(e){status(e.message,true);}finally{$('pdf').disabled=false;}};
-const recorder=new WavRecorder(player);let recordingFile=null,recordTimer;
-function recordingTime(){const s=Math.floor(recorder.seconds);$('recordTime').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
-$('record').onclick=async()=>{$('record').disabled=true;try{await recorder.start();$('recordStop').disabled=false;$('recordDownload').disabled=true;$('recordStatus').textContent='Recording instrument output';recordTimer=setInterval(recordingTime,200);}catch(e){$('record').disabled=false;$('recordStatus').textContent=e.message;}};
-$('recordStop').onclick=async()=>{$('recordStop').disabled=true;try{recordingFile=await recorder.stop();clearInterval(recordTimer);recordingTime();$('recordDownload').disabled=!recordingFile;$('recordStatus').textContent='Stereo WAV ready';}catch(e){$('recordStatus').textContent=e.message;}finally{$('record').disabled=false;}};
-$('recordDownload').onclick=async()=>{try{await saveRecording(recordingFile,(composition?filenameOf(composition):'MIDIum')+'.wav');}catch(e){if(e.name!=='AbortError')$('recordStatus').textContent=e.message;}};
-recorder.onLimit=()=>$('recordStop').onclick();
-recorder.onError=message=>{$('recordStatus').textContent=message;};
-// Finishing a take on suspension retains its valid samples and makes it downloadable.
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&recorder.recording)$('recordStop').onclick();});
-
 $('about').onclick=()=>$('help').showModal();$('closeHelp').onclick=()=>$('help').close();
 
 function turnScore(delta){const pages=[...$('score').querySelectorAll('.score-page')];scorePage=Math.max(0,Math.min(pages.length-1,scorePage+delta));if(pages[scorePage])document.querySelector('.sheet-scroll').scrollTo({top:pages[scorePage].offsetTop,behavior:'instant'});$('pageCount').textContent=(pages.length?scorePage+1:0)+' / '+pages.length;}
