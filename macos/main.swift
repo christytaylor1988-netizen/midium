@@ -1,0 +1,27 @@
+import Cocoa
+import WebKit
+import Network
+
+let testing = CommandLine.arguments.contains("--self-test")
+final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+ var window:NSWindow!; var web:WKWebView!; var listener:NWListener!; var port:UInt16=0
+ let root=Bundle.main.resourceURL!.appendingPathComponent("Instrument")
+ func applicationDidFinishLaunching(_ n:Notification){
+  let menu=NSMenu();let item=NSMenuItem();menu.addItem(item);let appMenu=NSMenu();appMenu.addItem(withTitle:"Quit MIDIum",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");item.submenu=appMenu
+  let edit=NSMenuItem();menu.addItem(edit);let editing=NSMenu(title:"Edit");for (title,action,key) in [("Undo","undo:","z"),("Cut","cut:","x"),("Copy","copy:","c"),("Paste","paste:","v"),("Select All","selectAll:","a")]{editing.addItem(withTitle:title,action:Selector(action),keyEquivalent:key)};edit.submenu=editing;NSApp.mainMenu=menu
+  let config=WKWebViewConfiguration();config.mediaTypesRequiringUserActionForPlayback=[];config.websiteDataStore = .nonPersistent()
+  if testing {config.userContentController.add(self,name:"test");let probe=try! String(contentsOf:Bundle.main.resourceURL!.appendingPathComponent("test.js"),encoding:.utf8);config.userContentController.addUserScript(WKUserScript(source:probe,injectionTime:.atDocumentStart,forMainFrameOnly:true))}
+  web=WKWebView(frame:.zero,configuration:config);web.navigationDelegate=self
+  window=NSWindow(contentRect:NSRect(x:0,y:0,width:480,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false);window.title="MIDIum Mobile — LIE006";window.minSize=NSSize(width:350,height:550);window.contentView=web;window.center();if testing {window.level = .floating};window.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
+  do {let parameters=NWParameters.tcp;parameters.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:.any);listener=try NWListener(using:parameters);listener.newConnectionHandler={ [weak self] c in self?.serve(c) };listener.stateUpdateHandler={ [weak self] state in if case .ready=state {DispatchQueue.main.async {guard let self=self,let p=self.listener.port else{return};self.port=p.rawValue;self.web.load(URLRequest(url:URL(string:"http://127.0.0.1:\(self.port)/mobile/")!))}}};listener.start(queue:.global())}catch{let a=NSAlert();a.messageText="MIDIum could not start";a.informativeText=error.localizedDescription;a.runModal();NSApp.terminate(nil)}
+ }
+ func serve(_ c:NWConnection){c.start(queue:.global());c.receive(minimumIncompleteLength:1,maximumLength:65536){[weak self] data,_,_,_ in guard let self=self,let d=data,let request=String(data:d,encoding:.utf8),let target=request.components(separatedBy:" ").dropFirst().first else{c.cancel();return};let raw=target.components(separatedBy:"?")[0].removingPercentEncoding ?? "";var file=self.root.appendingPathComponent(raw).standardizedFileURL;if raw.hasSuffix("/"){file.appendPathComponent("index.html")};let permitted=file.path.hasPrefix(self.root.path+"/");let bytes=permitted ? try? Data(contentsOf:file):nil;let ext=file.pathExtension;let types=["html":"text/html","js":"application/javascript","css":"text/css","ttf":"font/ttf","svg":"image/svg+xml","png":"image/png"]
+  let headers="HTTP/1.1 \(bytes == nil ? "404 Not Found":"200 OK")\r\nContent-Type: \(types[ext] ?? "application/octet-stream")\r\nContent-Length: \(bytes?.count ?? 0)\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'self' blob: data:; script-src 'self' blob: 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' blob:;\r\nConnection: close\r\n\r\n";var response=Data(headers.utf8);if let bytes=bytes{response.append(bytes)};c.send(content:response,completion:.contentProcessed{_ in c.cancel()})}}
+ func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void){guard let u=action.request.url else{decisionHandler(.cancel);return};if action.shouldPerformDownload{decisionHandler(.download)}else{decisionHandler(u.host=="127.0.0.1" && u.port==Int(port) ? .allow:.cancel)}}
+ func webView(_ webView:WKWebView,navigationAction:WKNavigationAction,didBecome download:WKDownload){download.delegate=self}
+ func download(_ download:WKDownload,decideDestinationUsing response:URLResponse,suggestedFilename:String,completionHandler:@escaping(URL?)->Void){if testing {let folder=URL(fileURLWithPath:"/tmp/midium-native-exports");try? FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true);let target=folder.appendingPathComponent(suggestedFilename);try? FileManager.default.removeItem(at:target);completionHandler(target);return};let panel=NSSavePanel();panel.nameFieldStringValue=suggestedFilename;panel.beginSheetModal(for:window){result in completionHandler(result == .OK ? panel.url:nil)}}
+ func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage){if testing {let s=String(describing:message.body);try? s.write(toFile:ProcessInfo.processInfo.environment["MIDIUM_TEST_REPORT"] ?? "/tmp/midium-native-test.json",atomically:true,encoding:.utf8);NSApp.terminate(nil)}}
+ func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{return true}
+ func applicationWillTerminate(_ n:Notification){listener?.cancel()}
+}
+let app=NSApplication.shared;let delegate=App();app.delegate=delegate;app.setActivationPolicy(.regular);app.run()
